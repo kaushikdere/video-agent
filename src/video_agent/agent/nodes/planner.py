@@ -6,7 +6,7 @@ import time
 
 import structlog
 
-from video_agent.agent.state import AgentState, Beat, JobStatus, StoryPlan
+from video_agent.agent.state import AgentState, JobStatus, StoryPlan
 from video_agent.config import get_settings
 from video_agent.gateway.llm import llm_call
 
