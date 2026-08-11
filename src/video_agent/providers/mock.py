@@ -66,8 +66,9 @@ class MockVideoProvider(AbstractVideoProvider):
         colour = _PALETTE[request.shot_index % len(_PALETTE)]
         seed = request.seed or random.randint(1, 999999)
 
-        # Try to generate a real tiny MP4 with ffmpeg
-        storage_path = settings.local_storage_path
+        # Try to generate a real tiny MP4 with ffmpeg / OpenCV
+        # Always use absolute paths — cv2.VideoWriter fails silently with relative paths on macOS
+        storage_path = os.path.abspath(settings.local_storage_path)
         os.makedirs(storage_path, exist_ok=True)
 
         clip_filename = f"{request.job_id}_shot_{request.shot_index}.mp4"
@@ -77,17 +78,16 @@ class MockVideoProvider(AbstractVideoProvider):
         frame_path = os.path.join(storage_path, frame_filename)
         thumb_path = os.path.join(storage_path, thumb_filename)
 
-        # Generate with ffmpeg (coloured solid video)
+        # Generate with ffmpeg or OpenCV fallback
         hex_colour = colour.lstrip("#")
         r, g, b = int(hex_colour[0:2], 16), int(hex_colour[2:4], 16), int(hex_colour[4:6], 16)
+        beat_labels = ["SETUP", "DEVELOPMENT", "TURN", "RESOLUTION"]
+        label = beat_labels[request.shot_index % 4]
+
+        generated = False
         try:
             import subprocess
-
-            # Beat label as overlay text
-            beat_labels = ["SETUP", "DEVELOPMENT", "TURN", "RESOLUTION"]
-            label = beat_labels[request.shot_index % 4]
-
-            subprocess.run(
+            res = subprocess.run(
                 [
                     "ffmpeg", "-y",
                     "-f", "lavfi",
@@ -99,24 +99,78 @@ class MockVideoProvider(AbstractVideoProvider):
                 capture_output=True,
                 timeout=30,
             )
-            # Extract final frame
-            subprocess.run(
-                ["ffmpeg", "-y", "-sseof", "-0.1", "-i", clip_path, "-frames:v", "1", frame_path],
-                capture_output=True, timeout=10,
-            )
-            # Thumbnail = first frame
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", clip_path, "-frames:v", "1", thumb_path],
-                capture_output=True, timeout=10,
-            )
+            if res.returncode == 0:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-sseof", "-0.1", "-i", clip_path, "-frames:v", "1", frame_path],
+                    capture_output=True, timeout=10,
+                )
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", clip_path, "-frames:v", "1", thumb_path],
+                    capture_output=True, timeout=10,
+                )
+                generated = True
+        except Exception as ffmpeg_exc:
+            log.warning("ffmpeg_unavailable", error=str(ffmpeg_exc))
+
+        if not generated:
+            try:
+                import cv2
+                import numpy as np
+
+                width, height, fps = 1280, 720, 24
+                total_frames = int(fps * request.duration_seconds)
+                fourcc = getattr(cv2, "VideoWriter_fourcc", lambda *a: 0)(*"mp4v")
+                # Use absolute path — cv2.VideoWriter silently fails with relative paths on macOS
+                out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
+
+                if not out.isOpened():
+                    raise RuntimeError(f"cv2.VideoWriter could not open: {clip_path}")
+
+                last_frame = None
+                first_frame = None
+
+                for f_idx in range(total_frames):
+                    # Animated gradient — colours shift from dark to vivid
+                    shift = int((f_idx / total_frames) * 60)
+                    bg = np.zeros((height, width, 3), dtype=np.uint8)
+                    bg[:, :, 0] = max(0, min(255, b + shift))        # B channel
+                    bg[:, :, 1] = max(0, min(255, g + (shift // 2))) # G channel
+                    bg[:, :, 2] = max(0, min(255, r + (shift // 3))) # R channel
+
+                    title = f"Shot {request.shot_index + 1}: {label}"
+                    cv2.putText(bg, title, (200, 320), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 3, cv2.LINE_AA)
+                    cv2.putText(bg, f"Model: {settings.higgsfield_model}", (280, 400), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2, cv2.LINE_AA)
+                    cv2.putText(bg, f"Duration: {request.duration_seconds}s | Frame: {f_idx+1}/{total_frames}", (260, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (160, 160, 160), 1, cv2.LINE_AA)
+
+                    if first_frame is None:
+                        first_frame = bg.copy()
+                    last_frame = bg.copy()
+                    out.write(bg)
+
+                out.release()
+
+                # Verify the file was actually written
+                if not os.path.exists(clip_path) or os.path.getsize(clip_path) < 1000:
+                    raise RuntimeError(f"cv2 wrote empty/missing file: {clip_path}")
+
+                if last_frame is not None:
+                    cv2.imwrite(frame_path, last_frame)
+                if first_frame is not None:
+                    cv2.imwrite(thumb_path, first_frame)
+                log.info("opencv_clip_generated", path=clip_path, size=os.path.getsize(clip_path))
+                generated = True
+            except Exception as cv_exc:
+                log.warning("opencv_fallback_failed", error=str(cv_exc))
+
+        if generated:
             clip_url = f"file://{clip_path}"
             frame_url = f"file://{frame_path}"
             thumb_url = f"file://{thumb_path}"
-        except Exception as exc:
-            log.warning("ffmpeg_unavailable", error=str(exc))
+        else:
             clip_url = f"mock://clip/{request.job_id}/{request.shot_index}"
             frame_url = f"mock://frame/{request.job_id}/{request.shot_index}"
             thumb_url = f"mock://thumb/{request.job_id}/{request.shot_index}"
+
 
         latency = time.perf_counter() - t0
         log.info("mock_generate_ok", latency=round(latency, 2), colour=colour)

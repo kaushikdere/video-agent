@@ -58,6 +58,32 @@ ALIAS_MAP: dict[str, str] = _build_alias_map()
 _RETRYABLE = (RateLimitError, ServiceUnavailableError)
 
 
+FALLBACK_ORDER: dict[str, list[str]] = {
+    "reasoning-high": [
+        "gemini/gemini-flash-latest",
+        "anthropic/claude-3-5-sonnet-20241022",
+        "openai/gpt-4o"
+    ],
+    "reasoning-fast": [
+        "gemini/gemini-flash-lite-latest",
+        "anthropic/claude-3-haiku-20240307",
+        "openai/gpt-4o-mini"
+    ],
+    "vision-default": [
+        "gemini/gemini-flash-latest",
+        "anthropic/claude-3-5-sonnet-20241022",
+        "openai/gpt-4o"
+    ],
+    "embed-default": [
+        "gemini/text-embedding-004",
+        "openai/text-embedding-3-small"
+    ],
+    "realtime-voice": [
+        "openai/gpt-4o-realtime-preview"
+    ]
+}
+
+
 async def llm_call(
     alias: str,
     messages: list[dict[str, Any]],
@@ -70,78 +96,97 @@ async def llm_call(
 ) -> dict[str, Any]:
     """
     Async LLM call via LiteLLM.
+    Supports provider failover/fallback within the alias group.
 
     Returns:
         {"content": str, "model": str, "cost_usd": float, "tokens": int}
 
     Raises:
-        RuntimeError on non-retryable failure.
+        RuntimeError if all fallback models fail.
     """
-    model = ALIAS_MAP.get(alias, alias)
-    log = logger.bind(alias=alias, model=model, trace_id=trace_id)
+    models_to_try = FALLBACK_ORDER.get(alias, [alias])
+    errors = []
 
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if response_format:
-        kwargs["response_format"] = response_format
-    # Select API key based on which provider the resolved model uses
-    if model.startswith("gemini/") and settings.gemini_api_key:
-        kwargs["api_key"] = settings.gemini_api_key
-    elif model.startswith("anthropic/") and settings.anthropic_api_key:
-        kwargs["api_key"] = settings.anthropic_api_key
-    elif settings.openai_api_key:
-        kwargs["api_key"] = settings.openai_api_key
+    for model in models_to_try:
+        # Check key availability for the provider
+        api_key = None
+        if model.startswith("gemini/"):
+            if not settings.gemini_api_key:
+                continue
+            api_key = settings.gemini_api_key
+        elif model.startswith("anthropic/"):
+            if not settings.anthropic_api_key:
+                continue
+            api_key = settings.anthropic_api_key
+        elif model.startswith("openai/"):
+            if not settings.openai_api_key:
+                continue
+            api_key = settings.openai_api_key
 
-    # Add Langfuse metadata via litellm
-    if trace_id:
-        kwargs.setdefault("metadata", {})
-        kwargs["metadata"]["trace_id"] = trace_id
-        if metadata:
-            kwargs["metadata"].update(metadata)
+        log = logger.bind(alias=alias, model=model, trace_id=trace_id)
+        log.info("llm_call_attempting")
 
-    start = time.perf_counter()
-    response: Any = None
-    try:
-        async for attempt in AsyncRetrying(
-            retry=retry_if_exception_type(_RETRYABLE),
-            stop=stop_after_attempt(3),
-            wait=wait_exponential_jitter(initial=1, max=30),
-            reraise=True,
-        ):
-            with attempt:
-                response = await acompletion(**kwargs)
-    except AuthenticationError as exc:
-        log.error("llm_auth_error", error=str(exc))
-        raise RuntimeError(f"LLM auth failed for alias '{alias}'") from exc
-    except BadRequestError as exc:
-        log.error("llm_bad_request", error=str(exc))
-        raise RuntimeError(f"LLM bad request for alias '{alias}': {exc}") from exc
-    except Exception as exc:
-        log.error("llm_error", error=str(exc))
-        raise
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "api_key": api_key,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
 
-    latency = time.perf_counter() - start
-    cost = 0.0
-    try:
-        cost = completion_cost(completion_response=response)
-    except Exception:
-        pass
+        if trace_id:
+            kwargs.setdefault("metadata", {})
+            kwargs["metadata"]["trace_id"] = trace_id
+            if metadata:
+                kwargs["metadata"].update(metadata)
 
-    content = getattr(response.choices[0].message, "content", "") if response and hasattr(response, "choices") else ""
-    content = content or ""
-    usage = getattr(response, "usage", None) if response else None
-    tokens = getattr(usage, "total_tokens", 0) if usage else 0
-    model_name = getattr(response, "model", alias) if response else alias
+        start = time.perf_counter()
+        response: Any = None
+        try:
+            async for attempt in AsyncRetrying(
+                retry=retry_if_exception_type(_RETRYABLE),
+                stop=stop_after_attempt(3),
+                wait=wait_exponential_jitter(initial=1, max=10),
+                reraise=True,
+            ):
+                with attempt:
+                    response = await acompletion(**kwargs)
+            
+            # Succeeded! Process response
+            latency = time.perf_counter() - start
+            cost = 0.0
+            try:
+                cost = completion_cost(completion_response=response)
+            except Exception:
+                pass
 
-    log.info("llm_ok", latency=round(latency, 2), tokens=tokens, cost=round(cost, 6))
+            content = getattr(response.choices[0].message, "content", "") if response and hasattr(response, "choices") else ""
+            content = content or ""
+            usage = getattr(response, "usage", None) if response else None
+            tokens = getattr(usage, "total_tokens", 0) if usage else 0
+            model_name = getattr(response, "model", alias) if response else alias
 
-    return {
-        "content": content,
-        "model": model_name,
-        "cost_usd": cost,
-        "tokens": tokens,
-    }
+            log.info("llm_ok", latency=round(latency, 2), tokens=tokens, cost=round(cost, 6))
+
+            return {
+                "content": content,
+                "model": model_name,
+                "cost_usd": cost,
+                "tokens": tokens,
+            }
+
+        except AuthenticationError as exc:
+            log.error("llm_auth_error", error=str(exc))
+            errors.append(f"{model}: Auth failed ({exc})")
+        except BadRequestError as exc:
+            log.error("llm_bad_request", error=str(exc))
+            errors.append(f"{model}: Bad request ({exc})")
+        except Exception as exc:
+            log.warning("llm_model_failed_trying_next_fallback", error=str(exc))
+            errors.append(f"{model}: {type(exc).__name__} ({exc})")
+
+    # If we get here, all attempts failed
+    raise RuntimeError(f"All fallback models failed for alias '{alias}': {'; '.join(errors)}")
+

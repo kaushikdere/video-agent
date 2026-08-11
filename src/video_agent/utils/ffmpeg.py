@@ -7,31 +7,63 @@ from pathlib import Path
 
 def stitch_clips(clip_paths: list[str], output_path: str) -> None:
     """
-    Concatenate clips using ffmpeg concat demuxer.
-    All clips must have same codec/resolution.
+    Concatenate clips using ffmpeg concat demuxer or OpenCV fallback.
     """
     if not clip_paths:
         raise ValueError("No clips to stitch")
 
-    # Build concat list file
-    list_path = Path(output_path).with_suffix(".txt")
-    with open(list_path, "w") as f:
-        for path in clip_paths:
-            f.write(f"file '{path}'\n")
+    try:
+        # Build concat list file
+        list_path = Path(output_path).with_suffix(".txt")
+        with open(list_path, "w") as f:
+            for path in clip_paths:
+                f.write(f"file '{path}'\n")
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(list_path),
-        "-c", "copy",
-        output_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, timeout=120)
-    list_path.unlink(missing_ok=True)
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(list_path),
+            "-c", "copy",
+            output_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        list_path.unlink(missing_ok=True)
 
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg stitch failed: {result.stderr.decode()[:300]}")
+        if result.returncode == 0:
+            return
+    except Exception:
+        pass
+
+    # OpenCV fallback
+    try:
+        import cv2
+
+        writer = None
+        for clip in clip_paths:
+            cap = cv2.VideoCapture(clip)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 24
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+
+            if writer is None:
+                fourcc = getattr(cv2, "VideoWriter_fourcc", lambda *a: 0)(*"mp4v")
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
+
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                writer.write(frame)
+            cap.release()
+
+        if writer is not None:
+            writer.release()
+            return
+    except Exception as cv_exc:
+        raise RuntimeError(f"Video stitch failed: {cv_exc}") from cv_exc
+
 
 
 def add_music_bed(video_path: str, audio_path: str, output_path: str) -> None:

@@ -57,7 +57,7 @@ async def assemble_node(state: AgentState) -> dict[str, Any]:
     stitched_url = ""
     thumbnail_url = ""
 
-    storage_path = settings.local_storage_path
+    storage_path = os.path.abspath(settings.local_storage_path)
     os.makedirs(storage_path, exist_ok=True)
 
     # Upload individual clips

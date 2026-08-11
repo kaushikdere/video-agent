@@ -30,11 +30,16 @@ class Settings(BaseSettings):
 
     # ── Video provider ─────────────────────────────────────────────────────
     higgsfield_api_key: str = ""
-    higgsfield_base_url: str = "https://api.higgsfield.ai/v1"
-    # If no key is provided, the mock provider is used automatically
+    higgsfield_api_secret: str = ""
+    higgsfield_base_url: str = "https://platform.higgsfield.ai"
+    higgsfield_model: str = "higgsfield-ai/dop/standard"
+
+    # If both keys are provided, the higgsfield provider is used
     @property
     def video_provider(self) -> str:
-        return "higgsfield" if self.higgsfield_api_key else "mock"
+        return "higgsfield" if (self.higgsfield_api_key and self.higgsfield_api_secret) else "mock"
+
+
 
     # ── Observability ──────────────────────────────────────────────────────
     langfuse_public_key: str = ""
