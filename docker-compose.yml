@@ -1,0 +1,128 @@
+version: "3.9"
+
+services:
+  # ── Application ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video-agent-api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://video_agent:secret@postgres:5432/video_agent
+      REDIS_URL: redis://redis:6379/0
+      LANGFUSE_HOST: http://langfuse-server:3000
+      LITELLM_PROXY_URL: http://litellm:4000
+      S3_ENDPOINT_URL: http://minio:9000
+      STORAGE_BACKEND: s3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    volumes:
+      - ./artifacts:/app/artifacts
+    restart: unless-stopped
+
+  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: video-agent-postgres
+    environment:
+      POSTGRES_USER: video_agent
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: video_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis 7 ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: video-agent-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── MinIO (local S3) ────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: video-agent-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  # ── MinIO bucket bootstrap ──────────────────────────────────────────────────
+  minio-setup:
+    image: minio/mc:latest
+    container_name: video-agent-minio-setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+        sleep 5;
+        mc alias set local http://minio:9000 minioadmin minioadmin;
+        mc mb --ignore-existing local/video-agent-artifacts;
+        mc anonymous set download local/video-agent-artifacts;
+        exit 0;
+      "
+
+  # ── LiteLLM Proxy ──────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: video-agent-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "4"]
+    env_file: .env
+    restart: unless-stopped
+
+  # ── Langfuse (observability) ────────────────────────────────────────────────
+  langfuse-server:
+    image: langfuse/langfuse:latest
+    container_name: video-agent-langfuse
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://video_agent:secret@postgres:5432/video_agent
+      NEXTAUTH_SECRET: secret
+      SALT: secret
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: "false"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

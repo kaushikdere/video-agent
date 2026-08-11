@@ -1,0 +1,62 @@
+model_list:
+  # Reasoning / planning — Gemini first (OpenAI has no credits)
+  - model_name: reasoning-high
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: reasoning-high
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: reasoning-high
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Fast routing / classification — Gemini first
+  - model_name: reasoning-fast
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: reasoning-fast
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Vision / QC — Gemini first
+  - model_name: vision-default
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: vision-default
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Embeddings — Gemini only (OpenAI has no credits)
+  - model_name: embed-default
+    litellm_params:
+      model: gemini/text-embedding-004
+      api_key: os.environ/GEMINI_API_KEY
+
+router_settings:
+  routing_strategy: least-busy
+  fallbacks:
+    - reasoning-high:
+        - reasoning-fast
+    - vision-default:
+        - reasoning-high
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
+  num_retries: 3
+  allowed_fails: 2
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: false
