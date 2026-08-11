@@ -76,11 +76,12 @@ class HiggsFieldProvider(AbstractVideoProvider):
         log.info("higgsfield_generate_start", prompt_len=len(request.prompt))
         t0 = time.perf_counter()
 
+        resp: httpx.Response | None = None
         try:
             async for attempt in AsyncRetrying(
-                retry=retry_if_exception_type(httpx.HTTPStatusError),
                 stop=stop_after_attempt(3),
-                wait=wait_exponential_jitter(initial=2, max=30),
+                wait=wait_exponential_jitter(initial=1, max=10),
+                retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
                 reraise=True,
             ):
                 with attempt:
@@ -90,6 +91,9 @@ class HiggsFieldProvider(AbstractVideoProvider):
         except httpx.HTTPStatusError as exc:
             log.error("higgsfield_http_error", status=exc.response.status_code)
             raise RuntimeError(f"Higgsfield HTTP {exc.response.status_code}") from exc
+
+        if resp is None:
+            raise RuntimeError("Higgsfield request returned no response")
 
         latency = time.perf_counter() - t0
         data = resp.json()

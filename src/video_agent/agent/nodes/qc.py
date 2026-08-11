@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 import structlog
 
-from video_agent.agent.state import AgentState, JobStatus
+from video_agent.agent.state import AgentState, BudgetState, JobStatus, ShotResult
 from video_agent.config import get_settings
 from video_agent.gateway.llm import llm_call
 
@@ -36,26 +37,26 @@ Output ONLY valid JSON:
 }"""
 
 
-def _extract_json(raw: str) -> dict:
+def _extract_json(raw: str) -> dict[str, Any]:
     raw = raw.strip()
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
         raw = raw[start : end + 1]
-    return json.loads(raw)
+    return json.loads(raw)  # type: ignore[no-any-return]
 
 
-async def qc_shot_node(state: AgentState) -> dict:
+async def qc_shot_node(state: AgentState) -> dict[str, Any]:
     """LangGraph node: QC a shot against the bible."""
     shot_index = state["current_shot_index"]
     log = logger.bind(job_id=state["job_id"], node="qc_shot", shot=shot_index)
     log.info("node_start")
 
-    budget = dict(state["budget"])
+    budget: BudgetState = state["budget"].copy()
     budget["iterations"] += 1
     budget["elapsed_seconds"] = time.time() - budget["started_at"]
 
-    shots = list(state["shots"])
+    shots: list[ShotResult] = list(state["shots"])
     current_shot = next((s for s in shots if s["shot_index"] == shot_index), None)
 
     if current_shot is None or current_shot["status"] == "failed":
@@ -63,6 +64,14 @@ async def qc_shot_node(state: AgentState) -> dict:
         return {"budget": budget, "current_shot_index": shot_index + 1, "repair_count": 0}
 
     bible = state["continuity_bible"]
+    if bible is None:
+        log.error("missing_continuity_bible")
+        return {
+            "status": JobStatus.FAILED,
+            "error_message": "Continuity Bible is missing in state.",
+            "budget": budget,
+        }
+
     bible_text = json.dumps(bible, indent=2)
 
     shot_description = (
@@ -93,7 +102,7 @@ async def qc_shot_node(state: AgentState) -> dict:
     except Exception as exc:
         log.error("qc_llm_failed", error=str(exc))
         # If QC itself fails, pass the shot (don't waste repair budget on QC failure)
-        updated = dict(current_shot)
+        updated: ShotResult = current_shot.copy()
         updated["status"] = "ok"
         updated["qc_score"] = 0.75
         updated["qc_attempts"] = current_shot.get("qc_attempts", 0) + 1
@@ -119,7 +128,7 @@ async def qc_shot_node(state: AgentState) -> dict:
     budget["tokens_used"] += result["tokens"]
 
     repair_count = state.get("repair_count", 0)
-    updated = dict(current_shot)
+    updated = current_shot.copy()
     updated["qc_score"] = score
     updated["qc_attempts"] = current_shot.get("qc_attempts", 0) + 1
 
@@ -161,3 +170,4 @@ async def qc_shot_node(state: AgentState) -> dict:
             "repair_count": repair_count + 1,
             # current_shot_index stays the same for repair
         }
+

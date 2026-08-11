@@ -104,6 +104,7 @@ async def llm_call(
             kwargs["metadata"].update(metadata)
 
     start = time.perf_counter()
+    response: Any = None
     try:
         async for attempt in AsyncRetrying(
             retry=retry_if_exception_type(_RETRYABLE),
@@ -130,14 +131,17 @@ async def llm_call(
     except Exception:
         pass
 
-    content = response.choices[0].message.content or ""
-    tokens = response.usage.total_tokens if response.usage else 0
+    content = getattr(response.choices[0].message, "content", "") if response and hasattr(response, "choices") else ""
+    content = content or ""
+    usage = getattr(response, "usage", None) if response else None
+    tokens = getattr(usage, "total_tokens", 0) if usage else 0
+    model_name = getattr(response, "model", alias) if response else alias
 
     log.info("llm_ok", latency=round(latency, 2), tokens=tokens, cost=round(cost, 6))
 
     return {
         "content": content,
-        "model": response.model,
+        "model": model_name,
         "cost_usd": cost,
         "tokens": tokens,
     }

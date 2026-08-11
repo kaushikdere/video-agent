@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any, cast
 
 import structlog
 
-from video_agent.agent.state import AgentState, ContinuityBible, JobStatus
+from video_agent.agent.state import AgentState, BudgetState, ContinuityBible, JobStatus
 from video_agent.config import get_settings
 from video_agent.gateway.llm import llm_call
 
@@ -37,26 +38,34 @@ Schema:
 }"""
 
 
-def _extract_json(raw: str) -> dict:
+def _extract_json(raw: str) -> dict[str, Any]:
     raw = raw.strip()
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
         raw = raw[start : end + 1]
-    return json.loads(raw)
+    return json.loads(raw)  # type: ignore[no-any-return]
 
 
-async def lock_bible_node(state: AgentState) -> dict:
+async def lock_bible_node(state: AgentState) -> dict[str, Any]:
     """LangGraph node: produce and lock the ContinuityBible."""
     log = logger.bind(job_id=state["job_id"], node="lock_bible")
     log.info("node_start")
     t0 = time.perf_counter()
 
-    budget = dict(state["budget"])
+    budget: BudgetState = state["budget"].copy()
     budget["iterations"] += 1
     budget["elapsed_seconds"] = time.time() - budget["started_at"]
 
     story_plan = state["story_plan"]
+    if story_plan is None:
+        log.error("missing_story_plan")
+        return {
+            "status": JobStatus.FAILED,
+            "error_message": "Story plan is missing for bible node.",
+            "budget": budget,
+        }
+
     beats_summary = "\n".join(
         f"Beat {b['index']} ({b['label']}): {b['action']}" for b in story_plan["beats"]
     )
@@ -90,7 +99,7 @@ async def lock_bible_node(state: AgentState) -> dict:
 
     try:
         bible_data = _extract_json(result["content"])
-        bible = ContinuityBible(**bible_data)
+        bible: ContinuityBible = cast(ContinuityBible, bible_data)
     except Exception as exc:
         log.error("bible_parse_failed", error=str(exc))
         return {
@@ -104,7 +113,7 @@ async def lock_bible_node(state: AgentState) -> dict:
 
     log.info(
         "node_ok",
-        location=bible["location"],
+        location=bible.get("location", ""),
         latency=round(time.perf_counter() - t0, 2),
     )
 
@@ -112,3 +121,4 @@ async def lock_bible_node(state: AgentState) -> dict:
         "continuity_bible": bible,
         "budget": budget,
     }
+

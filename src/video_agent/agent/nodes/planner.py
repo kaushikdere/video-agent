@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any, cast
 
 import structlog
 
-from video_agent.agent.state import AgentState, JobStatus, StoryPlan
+from video_agent.agent.state import AgentState, BudgetState, JobStatus, StoryPlan
 from video_agent.config import get_settings
 from video_agent.gateway.llm import llm_call
 
@@ -46,22 +47,22 @@ Schema:
 }"""
 
 
-def _extract_json(raw: str) -> dict:
+def _extract_json(raw: str) -> dict[str, Any]:
     raw = raw.strip()
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
         raw = raw[start : end + 1]
-    return json.loads(raw)
+    return json.loads(raw)  # type: ignore[no-any-return]
 
 
-async def plan_story_node(state: AgentState) -> dict:
+async def plan_story_node(state: AgentState) -> dict[str, Any]:
     """LangGraph node: produce a StoryPlan from the user prompt."""
     log = logger.bind(job_id=state["job_id"], node="plan_story")
     log.info("node_start")
     t0 = time.perf_counter()
 
-    budget = dict(state["budget"])
+    budget: BudgetState = state["budget"].copy()
     budget["iterations"] += 1
     budget["elapsed_seconds"] = time.time() - budget["started_at"]
 
@@ -90,7 +91,7 @@ async def plan_story_node(state: AgentState) -> dict:
     try:
         plan_data = _extract_json(result["content"])
         _validate_plan(plan_data)
-        story_plan = StoryPlan(**plan_data)
+        story_plan: StoryPlan = cast(StoryPlan, plan_data)
     except Exception as exc:
         log.error("plan_parse_failed", error=str(exc), raw=result["content"][:200])
         return {
@@ -104,7 +105,7 @@ async def plan_story_node(state: AgentState) -> dict:
 
     log.info(
         "node_ok",
-        title=story_plan["title"],
+        title=story_plan.get("title", ""),
         latency=round(time.perf_counter() - t0, 2),
         cost=result["cost_usd"],
     )
@@ -116,7 +117,7 @@ async def plan_story_node(state: AgentState) -> dict:
     }
 
 
-def _validate_plan(data: dict) -> None:
+def _validate_plan(data: dict[str, Any]) -> None:
     beats = data.get("beats", [])
     if len(beats) != 4:
         raise ValueError(f"Expected 4 beats, got {len(beats)}")
@@ -127,3 +128,4 @@ def _validate_plan(data: dict) -> None:
     got_labels = {b.get("label") for b in beats}
     if not labels <= got_labels:
         raise ValueError(f"Missing beat labels: {labels - got_labels}")
+

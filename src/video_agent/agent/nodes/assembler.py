@@ -4,19 +4,20 @@ from __future__ import annotations
 import json
 import os
 import time
+from typing import Any
 
 import structlog
 
-from video_agent.agent.state import AgentState, DeliveryArtifacts, JobStatus
+from video_agent.agent.state import AgentState, BudgetState, DeliveryArtifacts, JobStatus
 from video_agent.config import get_settings
-from video_agent.utils.ffmpeg import stitch_clips, add_music_bed
-from video_agent.utils.storage import upload_file, presigned_url
+from video_agent.utils.ffmpeg import add_music_bed, stitch_clips
+from video_agent.utils.storage import presigned_url, upload_file
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 
-async def assemble_node(state: AgentState) -> dict:
+async def assemble_node(state: AgentState) -> dict[str, Any]:
     """
     LangGraph node: stitch clips → deliver artifacts.
 
@@ -29,7 +30,7 @@ async def assemble_node(state: AgentState) -> dict:
     log.info("node_start")
     t0 = time.perf_counter()
 
-    budget = dict(state["budget"])
+    budget: BudgetState = state["budget"].copy()
     budget["iterations"] += 1
     budget["elapsed_seconds"] = time.time() - budget["started_at"]
 
@@ -121,3 +122,4 @@ async def assemble_node(state: AgentState) -> dict:
         "status": final_status,
         "budget": budget,
     }
+

@@ -2,20 +2,21 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import structlog
 
-from video_agent.agent.state import AgentState, JobStatus, ShotResult
+from video_agent.agent.state import AgentState, BudgetState, JobStatus, ShotResult
 from video_agent.config import get_settings
 from video_agent.providers.base import GenerationRequest
-from video_agent.providers.mock import MockVideoProvider
 from video_agent.providers.higgsfield import HiggsFieldProvider
+from video_agent.providers.mock import MockVideoProvider
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 
-def _get_provider():
+def _get_provider() -> Any:
     if settings.video_provider == "higgsfield":
         return HiggsFieldProvider()
     return MockVideoProvider()
@@ -27,7 +28,12 @@ def _build_shot_prompt(state: AgentState, shot_index: int) -> str:
       bible + beat action + camera move
     """
     bible = state["continuity_bible"]
-    beat = state["story_plan"]["beats"][shot_index]
+    story_plan = state["story_plan"]
+
+    if bible is None or story_plan is None:
+        raise ValueError("Missing continuity_bible or story_plan in AgentState")
+
+    beat = story_plan["beats"][shot_index]
 
     return (
         f"Cinematic short film clip, {beat['duration_seconds']} seconds. "
@@ -44,7 +50,7 @@ def _build_shot_prompt(state: AgentState, shot_index: int) -> str:
     )
 
 
-async def generate_shot_node(state: AgentState) -> dict:
+async def generate_shot_node(state: AgentState) -> dict[str, Any]:
     """
     LangGraph node: generate the current shot.
 
@@ -56,7 +62,7 @@ async def generate_shot_node(state: AgentState) -> dict:
     log = logger.bind(job_id=state["job_id"], node="generate_shot", shot=shot_index)
     log.info("node_start")
 
-    budget = dict(state["budget"])
+    budget: BudgetState = state["budget"].copy()
     budget["iterations"] += 1
     budget["elapsed_seconds"] = time.time() - budget["started_at"]
 
@@ -150,3 +156,4 @@ async def generate_shot_node(state: AgentState) -> dict:
         "status": JobStatus.QC,
         "budget": budget,
     }
+

@@ -10,10 +10,10 @@ from video_agent.config import get_settings
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
-_langfuse = None
+_langfuse: Any = None
 
 
-def get_langfuse():
+def get_langfuse() -> Any:
     global _langfuse
     if _langfuse is None and settings.langfuse_public_key:
         try:
@@ -29,6 +29,7 @@ def get_langfuse():
         except Exception as exc:
             logger.warning("langfuse_init_failed", error=str(exc))
     return _langfuse
+
 
 
 def create_trace(job_id: str, user_prompt: str, metadata: dict[str, Any] | None = None) -> str:
