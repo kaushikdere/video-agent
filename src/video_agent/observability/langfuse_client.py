@@ -39,14 +39,26 @@ def create_trace(job_id: str, user_prompt: str, metadata: dict[str, Any] | None 
         return job_id  # fallback trace_id
 
     try:
-        trace = lf.trace(
-            id=job_id,
-            name="video-agent-job",
-            input={"prompt": user_prompt},
-            metadata=metadata or {},
-            tags=["video-agent", settings.app_env],
-        )
-        return trace.id
+        if hasattr(lf, "trace"):
+            trace = lf.trace(
+                id=job_id,
+                name="video-agent-job",
+                input={"prompt": user_prompt},
+                metadata=metadata or {},
+                tags=["video-agent", settings.app_env],
+            )
+            return getattr(trace, "id", job_id)
+        elif hasattr(lf, "start_observation"):
+            span = lf.start_observation(
+                name="video-agent-job",
+                input={"prompt": user_prompt},
+                metadata=metadata or {},
+            )
+            trace_id = getattr(span, "trace_id", job_id)
+            if hasattr(span, "end"):
+                span.end()
+            return trace_id
+        return job_id
     except Exception as exc:
         logger.warning("langfuse_trace_failed", error=str(exc))
         return job_id
@@ -58,9 +70,23 @@ def score_job(trace_id: str, score_name: str, value: float, comment: str = "") -
     if lf is None:
         return
     try:
-        lf.score(trace_id=trace_id, name=score_name, value=value, comment=comment)
+        if hasattr(lf, "create_score"):
+            lf.create_score(
+                trace_id=trace_id,
+                name=score_name,
+                value=value,
+                comment=comment or None,
+            )
+        elif hasattr(lf, "score"):
+            lf.score(
+                trace_id=trace_id,
+                name=score_name,
+                value=value,
+                comment=comment,
+            )
     except Exception as exc:
         logger.warning("langfuse_score_failed", error=str(exc))
+
 
 
 def flush() -> None:
