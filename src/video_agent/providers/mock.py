@@ -117,8 +117,10 @@ class MockVideoProvider(AbstractVideoProvider):
                 import cv2
                 import numpy as np
 
-                width, height, fps = 1280, 720, 24
-                total_frames = int(fps * request.duration_seconds)
+                width: int = 1280
+                height: int = 720
+                fps: int = 24
+                total_frames: int = fps * request.duration_seconds
                 fourcc = getattr(cv2, "VideoWriter_fourcc", lambda *a: 0)(*"mp4v")  # type: ignore[misc]
                 # Use absolute path — cv2.VideoWriter silently fails with relative paths on macOS
                 out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
