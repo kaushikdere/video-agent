@@ -52,12 +52,12 @@ User Prompt
     │
     ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    LangGraph StateGraph                               │
-│                                                                       │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────┐   ┌───────┐ │
-│  │  Planner │ → │  Bible   │ → │Generator │ → │  QC  │ → │Assem- │ │
-│  │  Node    │   │  Node    │   │  Node    │   │ Node │   │bler   │ │
-│  └──────────┘   └──────────┘   └──────────┘   └──────┘   └───────┘ │
+│                    LangGraph StateGraph                              │
+│                                                                      │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────┐   ┌───────┐   │
+│  │  Planner │ → │  Bible   │ → │Generator │ → │  QC  │ → │Assem- │   │
+│  │  Node    │   │  Node    │   │  Node    │   │ Node │   │bler   │   │
+│  └──────────┘   └──────────┘   └──────────┘   └──────┘   └───────┘   │
 │  4-beat arc     Continuity     Shot prompt     Vision      ffmpeg    │
 │  (LLM)          Bible (LLM)    + generation    model QC    stitch    │
 │                 immutable      (sequential)    ≥ 0.75      + deliver │
@@ -67,7 +67,7 @@ User Prompt
     ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Common Platform (Guidelines.pdf)                               │
-│                                                                  │
+│                                                                 │
 │  FastAPI (async)  ·  LiteLLM proxy  ·  Redis checkpoints        │
 │  Langfuse traces  ·  PostgreSQL+pgvector  ·  MinIO/S3           │
 └─────────────────────────────────────────────────────────────────┘
