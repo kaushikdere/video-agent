@@ -119,15 +119,15 @@ class MockVideoProvider(AbstractVideoProvider):
 
                 width, height, fps = 1280, 720, 24
                 total_frames = int(fps * request.duration_seconds)
-                fourcc = getattr(cv2, "VideoWriter_fourcc", lambda *a: 0)(*"mp4v")
+                fourcc = getattr(cv2, "VideoWriter_fourcc", lambda *a: 0)(*"mp4v")  # type: ignore[misc]
                 # Use absolute path — cv2.VideoWriter silently fails with relative paths on macOS
                 out = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
 
                 if not out.isOpened():
                     raise RuntimeError(f"cv2.VideoWriter could not open: {clip_path}")
 
-                last_frame = None
-                first_frame = None
+                last_frame: "np.ndarray | None" = None
+                first_frame: "np.ndarray | None" = None
 
                 for f_idx in range(total_frames):
                     # Animated gradient — colours shift from dark to vivid
